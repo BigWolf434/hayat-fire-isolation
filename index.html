@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Fire Isolation Management System</title>
+  <link rel="stylesheet" href="/theme.css" />
+</head>
+<body>
+  <div id="tooltip"></div>
+  <div id="page">
+    <section class="kpis">
+      <div class="card kpi"><span class="ic">🔥</span><div><small>Active isolation</small><b id="kActive">0</b></div></div>
+      <div class="card kpi"><span class="ic">✅</span><div><small>Resolved today</small><b id="kResolved">0</b></div></div>
+      <div class="card kpi"><span class="ic">⚠️</span><div><small>Total incidents</small><b id="kTotal">0</b></div></div>
+      <div class="card kpi"><span class="ic">🏭</span><div class="grow"><small>Plant fire readiness</small><b id="kReady">–</b><div class="bar"><i id="kBar"></i></div></div></div>
+    </section>
+
+    <section class="mid">
+      <div class="card">
+        <div class="vhead"><h3>🧊 3D Plant Viewer – Fire Isolation</h3>
+          <div class="vbtns">
+            <button data-view="iso">Overview</button><button data-view="top">Top</button>
+            <button data-view="front">Front</button><button data-view="side">Side</button>
+            <button id="btnBuilding">Buildings: Glass</button>
+          </div></div>
+        <div class="vbody" id="vbody">
+          <div id="loading"><div>Loading plant model… <span id="pct">0%</span></div><div id="loadError"></div></div>
+          <div class="legend">
+            <div><i style="background:#ef4444"></i>Hydrant line</div>
+            <div><i style="background:#3b82f6"></i>Sprinkler line</div>
+            <div><i style="background:#a855f7"></i>Fire pump line</div>
+            <div><i style="background:#f59e0b"></i>Valve open &nbsp;<i style="background:#22c55e"></i>Valve closed</div>
+          </div>
+          <div class="hint">Drag: orbit · Right-drag: pan · Scroll: zoom · Double-click pipe: focus</div>
+        </div>
+      </div>
+      <aside class="card proc" id="proc"></aside>
+    </section>
+
+    <section class="bottom">
+      <div class="card" id="cWater"></div>
+      <div class="card" id="cReady"></div>
+      <div class="card" id="cAct"></div>
+      <div class="card">
+        <h3>🔳 QR access</h3>
+        <p class="muted">Every valve has its own permanent QR code. Scan it to see the live status: OPEN or CLOSED, who closed it, when, and which pipe was leaking.</p>
+        <a href="/records.html#qr"><button class="pri">Open valve QR codes</button></a>
+      </div>
+    </section>
+  </div>
+  <script type="module" src="/main.js"></script>
+</body>
+</html>

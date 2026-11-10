@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Register · Hayat Fire Isolation</title>
+  <link rel="stylesheet" href="/theme.css" />
+</head>
+<body>
+  <div class="auth">
+    <div>
+      <div class="brandbox"><svg width="38" height="38" viewBox="0 0 40 40"><circle cx="20" cy="20" r="19" fill="#0d9488"/><path d="M20 6v28M6 20h28" stroke="#fff" stroke-width="3"/></svg>HAYAT</div>
+      <h1>Join the team that <em>keeps the plant safe.</em></h1>
+      <p class="lead">Every action you take is saved under your name: leaks reported, valves closed, tank volumes recorded.</p>
+    </div>
+    <form class="glass" id="f">
+      <h2>Create HSE officer account</h2><div class="sub">You need the access code from your HSE manager</div>
+      <label>Full name</label><input id="n" placeholder="e.g. Daniel Fatile" required />
+      <label>Username</label><input id="u" placeholder="e.g. daniel" required />
+      <label>Password (min 6)</label><input id="p" type="password" required />
+      <label>Confirm password</label><input id="p2" type="password" required />
+      <label>Access code</label><input id="c" required />
+      <button class="go">Register</button>
+      <div class="err" id="err"></div>
+      <div class="foot">Already registered? <a href="/login.html">Sign in</a></div>
+    </form>
+  </div>
+  <script type="module">
+    import { api } from '/api.js';
+    document.getElementById('f').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const err = document.getElementById('err'); err.style.color = ''; err.textContent = '';
+      if (p.value !== p2.value) { err.textContent = 'Passwords do not match'; return; }
+      try {
+        await api('/register', { body: { name: n.value, username: u.value, password: p.value, code: c.value }, noRedirect: true });
+        err.style.color = '#6ee7b7'; err.textContent = 'Account created. Redirecting to login…';
+        setTimeout(() => (location.href = '/login.html'), 1200);
+      } catch (ex) { err.textContent = ex.message; }
+    });
+  </script>
+</body>
+</html>

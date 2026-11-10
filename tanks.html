@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Water Tanks · Hayat Fire Isolation</title>
+  <link rel="stylesheet" href="/theme.css" />
+  <style>
+    .periods{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+    .per{background:#101d3d;border:1px solid var(--line);border-radius:12px;padding:12px}
+    .per small{color:var(--mut);display:block}.per b{display:block;font-size:28px}.per .d{font-size:12px}
+    .up{color:#22c55e}.down{color:#ef4444}
+    form .f{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:10px}
+    form label{display:block;font-size:12px;color:var(--mut);margin-bottom:4px}form input,form textarea{width:100%}
+    .leg span{margin-right:16px;font-size:12px}.leg i{display:inline-block;width:12px;height:4px;margin-right:6px;vertical-align:middle}
+    .tabsb{display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap}.tabsb button.on{background:#2563eb;border-color:#2563eb}
+    td small{display:block;color:var(--mut)}
+  </style>
+</head>
+<body>
+  <div id="page">
+    <section class="kpis" id="tk"></section>
+
+    <section class="grid2">
+      <div class="card"><h3>💧 Water rating (% of tank capacity)</h3><div class="periods" id="periods"></div>
+        <p class="muted">Daily = latest recorded day · Weekly / Monthly / Yearly = average of all recorded days in that period. Arrows compare with the previous period.</p></div>
+      <div class="card"><h3>📝 Daily tank inspection: record volume</h3><form id="f"></form></div>
+    </section>
+
+    <div class="card" style="margin-bottom:12px">
+      <h3>📈 Trend analysis</h3>
+      <div class="tabsb" id="tabs">
+        <button data-v="day" class="on">Daily</button><button data-v="week">Weekly</button>
+        <button data-v="month">Monthly</button><button data-v="year">Yearly</button>
+      </div>
+      <div id="c1"></div><div class="leg" id="leg"></div>
+      <div id="tbl" style="margin-top:12px"></div>
+    </div>
+
+    <div class="card" style="margin-bottom:12px"><h3>🚰 Daily water usage (m³ per day)</h3><div id="c2"></div>
+      <p class="muted">Amber = water used (level dropped vs the previous day). Green = refill (level rose). Needs records on consecutive days.</p></div>
+
+    <div class="card" style="margin-bottom:12px">
+      <h3>📥 Download monthly water report</h3>
+      <div class="row"><label class="muted">Month <select id="rm"></select></label>
+        <button id="rCsv" class="pri sm">Download Excel (CSV)</button><button id="rPdf" class="sm">Print / Save as PDF</button></div>
+      <p class="muted">Includes every day of the month: volume per tank, % full, who recorded it and when, plus the monthly average, minimum, maximum and water used.</p>
+    </div>
+
+    <div class="card"><h3>🗂 Every entry: exact value, who and when</h3>
+      <div class="row"><button id="csv" class="sm">Export all entries (CSV)</button></div><div id="hist"></div></div>
+  </div>
+
+  <script type="module">
+    import { api, requireLogin } from '/api.js';
+    import { mountShell, esc, fmt, today, setStatus } from '/shell.js';
+    const me = requireLogin();
+    mountShell('tanks', me, 'Water Tanks & Usage', 'Daily inspection · trend analysis · fire-water readiness');
+    const canWrite = me.role !== 'manager';
+    const $ = (s) => document.querySelector(s);
+    const COLS = ['#22c55e', '#f59e0b', '#a78bfa'];
+    let W = null, view = 'day';
+
+    const csvDownload = (name, rows) => {
+      const text = '\uFEFF' + rows.map((r) => r.map((c) => `"${String(c ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([text], { type: 'text/csv;charset=utf-8' }));
+      a.download = name; a.click();
+    };
+    const tname = (id) => W.tanks.find((t) => t.id === id).name;
+
+    /* ---------- charts ---------- */
+    function lineChart(rows, lines) {
+      if (!rows.length) return '<p class="muted">No data yet. Record the first tank volume using the form above.</p>';
+      const Wd = 900, H = 260, p = { l: 40, r: 14, t: 12, b: 26 }, n = rows.length;
+      const x = (i) => p.l + (n === 1 ? (Wd - p.l - p.r) / 2 : (i / (n - 1)) * (Wd - p.l - p.r));
+      const y = (v) => p.t + (1 - v / 100) * (H - p.t - p.b);
+      let s = `<svg viewBox="0 0 ${Wd} ${H}" style="width:100%;height:auto">`;
+      [0, 25, 50, 75, 100].forEach((g) => (s += `<line x1="${p.l}" x2="${Wd - p.r}" y1="${y(g)}" y2="${y(g)}" stroke="#1e2f57"/><text x="${p.l - 6}" y="${y(g) + 4}" fill="#8fa3c8" font-size="11" text-anchor="end">${g}%</text>`));
+      const step = Math.ceil(n / 8);
+      rows.forEach((r, i) => { if (i % step === 0 || i === n - 1) s += `<text x="${x(i)}" y="${H - 8}" fill="#8fa3c8" font-size="11" text-anchor="middle">${esc(r.label)}</text>`; });
+      lines.forEach((L) => {
+        const pts = rows.map((r, i) => [i, L.get(r)]).filter(([, v]) => v != null);
+        if (pts.length > 1) s += `<polyline fill="none" stroke="${L.color}" stroke-width="${L.w || 2.5}" points="${pts.map(([i, v]) => `${x(i)},${y(v)}`).join(' ')}"/>`;
+        pts.forEach(([i, v]) => (s += `<circle cx="${x(i)}" cy="${y(v)}" r="3.5" fill="${L.color}"><title>${esc(rows[i].label)} · ${L.name}: ${v}%</title></circle>`));
+      });
+      return s + '</svg>';
+    }
+    function barChart(rows) {
+      rows = rows.filter((r) => r.drop != null);
+      if (!rows.length) return '<p class="muted">Usage appears after records on two consecutive days.</p>';
+      const Wd = 900, H = 220, p = { l: 40, r: 14, t: 18, b: 26 }, n = rows.length;
+      const mx = Math.max(1, ...rows.map((r) => Math.abs(r.drop))), bw = Math.min(40, ((Wd - p.l - p.r) / n) * 0.6), step = Math.ceil(n / 8);
+      let s = `<svg viewBox="0 0 ${Wd} ${H}" style="width:100%;height:auto"><line x1="${p.l}" x2="${Wd - p.r}" y1="${H - p.b}" y2="${H - p.b}" stroke="#1e2f57"/>`;
+      rows.forEach((r, i) => {
+        const cx = p.l + ((i + 0.5) / n) * (Wd - p.l - p.r), hh = (Math.abs(r.drop) / mx) * (H - p.t - p.b);
+        s += `<rect x="${cx - bw / 2}" y="${H - p.b - hh}" width="${bw}" height="${hh}" rx="3" fill="${r.drop >= 0 ? '#f59e0b' : '#22c55e'}"><title>${r.date}: ${r.drop >= 0 ? 'used ' : 'refilled '}${Math.abs(r.drop)} m³</title></rect>`;
+        if (n <= 16) s += `<text x="${cx}" y="${H - p.b - hh - 4}" fill="#e8eefb" font-size="10" text-anchor="middle">${Math.abs(r.drop)}</text>`;
+        if (i % step === 0) s += `<text x="${cx}" y="${H - 8}" fill="#8fa3c8" font-size="11" text-anchor="middle">${r.date.slice(5)}</text>`;
+      });
+      return s + '</svg>';
+    }
+
+    /* ---------- trend views ---------- */
+    function trendRows() {
+      if (view === 'day') return W.days.slice(-30).map((d) => ({ label: d.date.slice(5), pct: d.pct, t: Object.fromEntries(W.tanks.map((t) => [t.id, d.tanks[t.id]?.pct ?? null])) }));
+      const lim = { week: 12, month: 12, year: 50 }[view];
+      return W.buckets[view].slice(-lim).map((b) => ({ label: view === 'week' ? b.key.slice(5) : b.key, pct: b.pct, t: b.tank }));
+    }
+    function renderTrend() {
+      const rows = trendRows();
+      $('#c1').innerHTML = lineChart(rows, [
+        { name: 'Total', color: '#38bdf8', w: 3.5, get: (r) => r.pct },
+        ...W.tanks.map((t, i) => ({ name: t.name, color: COLS[i], get: (r) => r.t[t.id] }))]);
+      $('#leg').innerHTML = `<span><i style="background:#38bdf8"></i>Total</span>` + W.tanks.map((t, i) => `<span><i style="background:${COLS[i]}"></i>${esc(t.name)}</span>`).join('');
+      const cls = (v) => (v >= 75 ? 'bg-ready' : v >= 50 ? 'bg-degraded' : 'bg-critical');
+      if (!W.days.length) { $('#tbl').innerHTML = ''; return; }
+      if (view === 'day') {
+        $('#tbl').innerHTML = `<table><tr><th>Date</th>${W.tanks.map((t) => `<th>${esc(t.name)} (m³ · % · recorded by)</th>`).join('')}<th>Total m³</th><th>Total %</th><th>Used vs yesterday</th></tr>
+          ${W.days.slice().reverse().slice(0, 62).map((d) => `<tr><td><b>${d.date}</b></td>
+            ${W.tanks.map((t) => { const e = d.tanks[t.id]; return e ? `<td><b>${e.volume} m³</b> · ${e.pct}%<small>by ${esc(e.by)} · ${new Date(e.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</small></td>` : '<td class="muted">not recorded</td>'; }).join('')}
+            <td>${d.total} m³</td><td><span class="chip ${cls(d.pct)}">${d.pct}%</span></td>
+            <td>${d.drop == null ? '—' : d.drop >= 0 ? d.drop + ' m³ used' : Math.abs(d.drop) + ' m³ refilled'}</td></tr>`).join('')}</table>`;
+      } else {
+        const names = { week: 'Week starting', month: 'Month', year: 'Year' };
+        $('#tbl').innerHTML = `<table><tr><th>${names[view]}</th><th>Days recorded</th><th>Average %</th>${W.tanks.map((t) => `<th>${esc(t.name)} avg %</th>`).join('')}<th>Lowest %</th><th>Highest %</th><th>Water used</th></tr>
+          ${W.buckets[view].slice().reverse().map((b) => `<tr><td><b>${b.key}</b></td><td>${b.days}</td><td><span class="chip ${cls(b.pct)}">${b.pct}%</span></td>
+            ${W.tanks.map((t) => `<td>${b.tank[t.id] == null ? '—' : b.tank[t.id] + '%'}</td>`).join('')}<td>${b.min}%</td><td>${b.max}%</td><td>${b.used} m³</td></tr>`).join('')}</table>`;
+      }
+    }
+    $('#tabs').addEventListener('click', (e) => {
+      const b = e.target.closest('button'); if (!b) return;
+      view = b.dataset.v;
+      document.querySelectorAll('#tabs button').forEach((x) => x.classList.toggle('on', x === b));
+      renderTrend();
+    });
+
+    /* ---------- monthly report ---------- */
+    function monthData(m) {
+      const days = W.days.filter((d) => d.date.startsWith(m));
+      const b = W.buckets.month.find((x) => x.key === m);
+      return { days, b };
+    }
+    function reportRows(m) {
+      const { days, b } = monthData(m);
+      const rows = [['HAYAT FIRE WATER REPORT', m], ['Total capacity (m3)', W.totalCapacity], ['Days recorded', days.length],
+        ['Average % full', b?.pct ?? ''], ['Lowest %', b?.min ?? ''], ['Highest %', b?.max ?? ''], ['Water used (m3)', b?.used ?? ''],
+        ...W.tanks.map((t) => [t.name + ' average %', b?.tank[t.id] ?? '']), [],
+        ['Date', ...W.tanks.flatMap((t) => [t.name + ' volume (m3)', t.name + ' %', t.name + ' recorded by', t.name + ' recorded at', t.name + ' note']),
+          'Total volume (m3)', 'Total %', 'Used vs previous day (m3, negative = refill)']];
+      days.forEach((d) => rows.push([d.date, ...W.tanks.flatMap((t) => { const e = d.tanks[t.id]; return e ? [e.volume, e.pct, e.by, fmt(e.at), e.note] : ['', '', '', '', '']; }), d.total, d.pct, d.drop ?? '']));
+      return rows;
+    }
+    $('#rCsv').onclick = () => { const m = $('#rm').value; if (m) csvDownload(`water-report-${m}.csv`, reportRows(m)); };
+    $('#rPdf').onclick = () => {
+      const m = $('#rm').value; if (!m) return;
+      const { days, b } = monthData(m);
+      const w = window.open('', '_blank'); if (!w) { alert('Allow pop-ups to print the report.'); return; }
+      w.document.write(`<html><head><title>Water report ${m}</title><style>body{font-family:Arial;padding:24px;color:#000}table{border-collapse:collapse;width:100%;font-size:12px}
+        th,td{border:1px solid #999;padding:5px;text-align:left}th{background:#eee}h1{margin:0}</style></head><body>
+        <h1>Hayat Kimya · Fire Water Report</h1><p><b>Month:</b> ${m} &nbsp; <b>Capacity:</b> ${W.totalCapacity} m³ &nbsp; <b>Days recorded:</b> ${days.length}</p>
+        <p><b>Average:</b> ${b?.pct ?? '–'}% &nbsp; <b>Lowest:</b> ${b?.min ?? '–'}% &nbsp; <b>Highest:</b> ${b?.max ?? '–'}% &nbsp; <b>Water used:</b> ${b?.used ?? '–'} m³</p>
+        <table><tr><th>Date</th>${W.tanks.map((t) => `<th>${esc(t.name)} m³ / % / by</th>`).join('')}<th>Total m³</th><th>Total %</th><th>Used</th></tr>
+        ${days.map((d) => `<tr><td>${d.date}</td>${W.tanks.map((t) => { const e = d.tanks[t.id]; return `<td>${e ? `${e.volume} m³ / ${e.pct}% / ${esc(e.by)}` : '—'}</td>`; }).join('')}<td>${d.total}</td><td>${d.pct}%</td><td>${d.drop ?? '—'}</td></tr>`).join('')}</table>
+        <p>Generated ${new Date().toLocaleString()} by ${esc(me.name)}</p><script>onload=()=>print()<\/script></body></html>`);
+      w.document.close();
+    };
+
+    /* ---------- page ---------- */
+    function render() {
+      const u = W.usage, cur = W.currentTotal;
+      $('#tk').innerHTML = `
+        <div class="card kpi"><span class="ic">🛢</span><div><small>Total capacity</small><b>${W.totalCapacity.toLocaleString()} m³</b><small>2 × 850 m³</small></div></div>
+        <div class="card kpi"><span class="ic">💧</span><div><small>Latest volume ${W.currentDate ? '(' + W.currentDate + ')' : ''}</small><b>${cur == null ? '–' : Math.round(cur) + ' m³'}</b><small>${W.currentPct == null ? 'no records yet' : W.currentPct + '% of recorded tanks'}</small></div></div>
+        <div class="card kpi"><span class="ic">🚰</span><div><small>Avg daily usage (7 days)</small><b>${u.avg7 == null ? '–' : u.avg7 + ' m³'}</b><small>30 days: ${u.avg30 == null ? '–' : u.avg30 + ' m³'}</small></div></div>
+        <div class="card kpi"><span class="ic">⏳</span><div><small>Estimated days of supply</small><b>${u.daysLeft == null ? '–' : u.daysLeft}</b><small>at current usage, no refill</small></div></div>`;
+
+      const names = { day: 'Daily', week: 'Weekly', month: 'Monthly', year: 'Yearly' };
+      $('#periods').innerHTML = Object.entries(W.summary).map(([k, p]) => `<div class="per"><small>${names[k]}${p.label ? ' · ' + p.label : ''}</small><b>${p.pct == null ? '–' : p.pct + '%'}</b>
+        <div class="d ${p.delta == null ? 'muted' : p.delta >= 0 ? 'up' : 'down'}">${p.delta == null ? 'no earlier period' : (p.delta >= 0 ? '▲ +' : '▼ ') + p.delta + ' pts'}</div>
+        <div class="bar"><i class="${p.pct == null ? '' : p.pct >= 75 ? 'bg-ready' : p.pct >= 50 ? 'bg-degraded' : 'bg-critical'}" style="width:${p.pct || 0}%"></i></div></div>`).join('');
+
+      renderTrend();
+      $('#c2').innerHTML = barChart(W.days.slice(-30));
+
+      const months = [...new Set(W.days.map((d) => d.date.slice(0, 7)))].reverse();
+      const keep = $('#rm').value;
+      $('#rm').innerHTML = months.length ? months.map((m) => `<option ${m === keep ? 'selected' : ''}>${m}</option>`).join('') : '<option value="">no records yet</option>';
+
+      $('#hist').innerHTML = `<table><tr><th>Date</th><th>Tank</th><th>Exact volume entered</th><th>% full</th><th>Recorded by</th><th>Recorded at</th><th>Note</th></tr>
+        ${W.entries.slice(0, 200).map((l) => { const t = W.tanks.find((x) => x.id === l.tank); return `<tr><td>${l.date}</td><td>${esc(t.name)}</td><td><b>${l.volume} m³</b></td><td>${Math.round((l.volume / t.capacity) * 100)}%</td><td>${esc(l.by)}</td><td>${fmt(l.at)}</td><td>${esc(l.note)}</td></tr>`; }).join('')}</table>`;
+    }
+
+    function renderForm() {
+      $('#f').innerHTML = `<div class="f"><div><label>Inspection date</label><input type="date" id="fd" value="${today()}" max="${today()}" ${canWrite ? '' : 'disabled'}></div>
+        ${W.tanks.map((t) => `<div><label>${esc(t.name)} volume (m³, max ${t.capacity})</label><input type="number" step="0.1" min="0" max="${t.capacity}" id="v-${t.id}" placeholder="${t.volume ?? ''}" ${canWrite ? '' : 'disabled'}></div>`).join('')}</div>
+        <label>Inspection note (optional: rails, ladder, leaks, gauge…)</label><textarea id="fn" rows="2" ${canWrite ? '' : 'disabled'}></textarea>
+        <div class="row"><button class="pri" ${canWrite ? '' : 'disabled'}>${canWrite ? 'Save inspection' : 'View-only access'}</button><span class="muted" id="fm"></span></div>
+        <p class="muted">Saving again for the same tank and date replaces the earlier entry (the change stays in the activity log).</p>`;
+    }
+    $('#f').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const m = $('#fm'); m.textContent = '';
+      try {
+        let n = 0;
+        for (const t of W.tanks) {
+          const v = document.getElementById('v-' + t.id).value;
+          if (v === '') continue;
+          await api('/tanks/log', { body: { tank: t.id, volume: Number(v), date: $('#fd').value, note: $('#fn').value } }); n++;
+        }
+        if (!n) { m.textContent = 'Enter at least one tank volume.'; return; }
+        await load(true);
+        $('#fm').textContent = '✅ Saved';
+      } catch (ex) { m.textContent = '⚠ ' + ex.message; }
+    });
+    $('#csv').onclick = () => csvDownload('tank-entries.csv', [['Date', 'Tank', 'Volume m3', '% full', 'Recorded by', 'Recorded at', 'Note'],
+      ...W.entries.map((l) => [l.date, tname(l.tank), l.volume, Math.round((l.volume / W.tanks.find((t) => t.id === l.tank).capacity) * 100), l.by, fmt(l.at), l.note])]);
+
+    async function load(formToo) {
+      W = await api('/water'); render();
+      if (formToo || !$('#f').children.length) renderForm();
+      const pend = W.tanks.filter((t) => !t.loggedToday).length;
+      setStatus(pend ? '⚠ Today\'s tank inspection pending' : '✅ Tank inspection recorded today', pend ? 'bad' : 'ok');
+    }
+    await load(true);
+    setInterval(() => load(false).catch(() => {}), 15000);
+  </script>
+</body>
+</html>

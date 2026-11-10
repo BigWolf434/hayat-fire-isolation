@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Records · Hayat Fire Isolation</title>
+  <link rel="stylesheet" href="/theme.css" />
+</head>
+<body>
+  <div id="page" class="stack">
+    <div class="card"><h3>🏢 Building fire capacity</h3><div id="bld"></div></div>
+    <div class="card">
+      <h3>🔧 Valve register</h3>
+      <div class="row"><label class="muted">System <select id="fSys"><option value="">All valves</option><option>Hydrant</option><option>Sprinkler</option><option>Fire Pump</option></select></label></div>
+      <div id="valves"></div>
+    </div>
+
+    <div class="card">
+      <h3>🔥 Pipe leakage records</h3>
+      <div class="row">
+        <label class="muted">Pipe system <select id="fISys"><option value="">All (Hydrant + Sprinkler + Fire Pump)</option><option>Hydrant</option><option>Sprinkler</option><option>Fire Pump</option></select></label>
+        <label class="muted">Officer <select id="fOfficer"></select></label>
+        <label class="muted">Status <select id="fStatus"><option value="">All</option><option>ACTIVE</option><option>RESOLVED</option></select></label>
+        <label class="muted">From <input type="date" id="fFrom"></label>
+        <label class="muted">To <input type="date" id="fTo"></label>
+      </div>
+      <div class="row">
+        <button id="btnCsv" class="pri sm">⬇ Download leakage report (CSV)</button>
+        <button id="btnPipes" class="sm">⬇ Download pipe summary (CSV)</button>
+        <span class="muted">Both follow the filters above, so you can download Hydrant only or Sprinkler only.</span>
+      </div>
+      <div id="incidents"></div>
+    </div>
+
+    <div class="card"><h3>🧾 Activity log (who did what)</h3><div id="log"></div></div>
+
+    <div class="card" id="qrsec">
+      <h3>🔳 QR codes for valves</h3>
+      <p class="muted">Each QR carries the permanent site link below plus the valve ID. The status is always read live when scanned, so a printed QR never needs replacing.</p>
+      <div id="qrcontrols" class="row">
+        <label class="muted">Permanent site link <input id="baseUrl" size="40" placeholder="https://your-site.example.com" /></label>
+        <button id="btnSaveUrl" class="pri sm" style="display:none">Save link</button>
+        <button id="btnPrint" class="sm">🖨 Print QR sheet</button>
+      </div>
+      <p class="muted" id="qrNote"></p>
+      <div class="qrs" id="qrs"></div>
+    </div>
+
+    <div class="card" id="users" style="display:none">
+      <h3>👥 Users & passwords (admin only)</h3>
+      <p class="muted">Only the admin account can see this. Officer and manager passwords are shown below.</p>
+      <div id="userList"></div>
+      <h4>Add a user</h4>
+      <div class="row">
+        <input id="nuUser" placeholder="username" /><input id="nuName" placeholder="Full name" />
+        <input id="nuPass" type="password" placeholder="password (min 6)" />
+        <select id="nuRole"><option value="officer">HSE Officer</option><option value="manager">HSE Manager (view-only)</option><option value="admin">Admin</option></select>
+        <button id="btnAddUser" class="pri sm">Add user</button>
+      </div>
+      <div class="row"><button id="btnPw" class="sm">Change my password</button></div>
+    </div>
+  </div>
+
+  <script type="module">
+    import QRCode from 'qrcode';
+    import { api, requireLogin } from '/api.js';
+    import { mountShell, esc, fmt, setStatus } from '/shell.js';
+    import { LABEL, PIPES, ISOLATION } from '/config.js';
+    import { confirmBox, alertBox, promptBox, toast } from '/ui.js';
+
+    const me = requireLogin();
+    mountShell('records', me, 'Records & Valve Register', 'Every action is saved under the officer\'s name');
+    const $ = (s) => document.querySelector(s);
+    let S = null, LOG = [], fOfficer = '', fStatus = '', fSys = '', fISys = '', fFrom = '', fTo = '';
+    const canWrite = me.role !== 'manager';
+    const sysOfPipe = (p) => PIPES.find((x) => x.id === p)?.system || '';
+    const dateOf = (iso) => new Date(iso).toLocaleDateString('en-CA');
+    const fail = (title, e) => alertBox({ title, message: e.message, tone: 'error' });
+    const csvDownload = (name, rows) => {
+      const text = '\uFEFF' + rows.map((r) => r.map((c) => `"${String(c ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([text], { type: 'text/csv;charset=utf-8' }));
+      a.download = name; a.click();
+    };
+
+    async function load() {
+      [S, LOG] = await Promise.all([api('/state'), api('/log')]);
+      render();
+      if (me.role === 'admin') renderUsers(await api('/users'));
+    }
+    const sys = () => S.valves.filter((v) => !fSys || v.system === fSys);
+
+    const incRows = () => S.incidents.filter((i) =>
+      (!fOfficer || i.reportedBy === fOfficer || i.resolvedBy === fOfficer) && (!fStatus || i.status === fStatus) &&
+      (!fISys || (i.system || sysOfPipe(i.pipe)) === fISys) &&
+      (!fFrom || dateOf(i.reportedAt) >= fFrom) && (!fTo || dateOf(i.reportedAt) <= fTo));
+
+    function render() {
+      const act = S.incidents.filter((i) => i.status === 'ACTIVE').length;
+      setStatus(act ? `🔥 ${act} isolation active` : 'All systems operational', act ? 'bad' : 'ok');
+
+      $('#bld').innerHTML = `<table><tr><th>Building</th><th>Surrounding valves</th><th>Fire capacity</th></tr>
+        ${S.readiness.buildings.map((b) => `<tr><td><b>${esc(b.name)}</b></td>
+          <td>${b.valves.length ? b.valves.map((v) => { const st = S.valves.find((x) => x.id === v)?.status; return `${v.toUpperCase()} <span class="chip c-${st}">${st}</span>`; }).join(' &nbsp; ') : '<span class="muted">none assigned</span>'}</td>
+          <td>${b.pct == null ? '—' : `<span class="chip c-${b.level}">${b.pct}% · ${LABEL[b.level]}</span> <span class="muted">${b.open}/${b.total} open</span>`}</td></tr>`).join('')}</table>`;
+
+      $('#valves').innerHTML = `<table><tr><th>Valve</th><th>System</th><th>Status</th><th>Closed by</th><th>Closed at</th><th>Leaking pipe</th></tr>
+        ${sys().map((v) => {
+          const closed = v.status === 'CLOSED', pipes = closed ? v.activePipes : v.lastPipes;
+          return `<tr><td><b>${esc(v.name)}</b></td><td>${v.system}</td><td><span class="chip c-${v.status}">${v.status}</span></td>
+            <td>${v.closedBy ? esc(v.closedBy) + (closed ? '' : '<div class="muted">(last)</div>') : '—'}</td>
+            <td>${fmt(v.closedAt)}${!closed && v.reopenedAt ? `<div class="muted">reopened ${fmt(v.reopenedAt)} by ${esc(v.reopenedBy)}</div>` : ''}</td>
+            <td>${pipes.length ? esc(pipes.map((p) => p.toUpperCase()).join(', ')) : '—'}</td></tr>`; }).join('')}</table>`;
+
+      S.valves.forEach((v) => { const el = document.getElementById('qs-' + v.id); if (el) { el.className = 'chip livechip c-' + v.status; el.textContent = v.status; } });
+
+      const names = [...new Set([...S.incidents.flatMap((i) => [i.reportedBy, i.resolvedBy]), ...LOG.map((l) => l.user)].filter((n) => n && n !== '-'))].sort();
+      $('#fOfficer').innerHTML = '<option value="">All officers</option>' + names.map((n) => `<option ${n === fOfficer ? 'selected' : ''}>${esc(n)}</option>`).join('');
+      $('#fStatus').value = fStatus;
+      const rows = incRows();
+      $('#incidents').innerHTML = rows.length ? `<table><tr><th>Reported</th><th>Pipe</th><th>System</th><th>Reported by</th><th>Valves closed</th><th>Status</th><th>Resolved</th><th></th></tr>
+        ${rows.map((i) => `<tr><td>${fmt(i.reportedAt)}</td><td><b>${esc(i.pipe.toUpperCase())}</b></td><td>${esc(i.system || sysOfPipe(i.pipe))}</td><td>${esc(i.reportedBy)}</td>
+          <td>${esc(i.closed.map((x) => x.toUpperCase()).join(', ') || '—')}</td><td><span class="chip c-${i.status}">${i.status}</span></td>
+          <td>${i.resolvedAt ? fmt(i.resolvedAt) + '<div class="muted">by ' + esc(i.resolvedBy) + '</div>' : '—'}</td>
+          <td>${i.status === 'ACTIVE' && canWrite ? `<button class="sm" data-a="resolve" data-id="${i.id}">Resolve</button>` : ''}</td></tr>`).join('')}</table>` : '<p class="muted">No leaks match these filters.</p>';
+      const logs = LOG.filter((l) => !fOfficer || l.user === fOfficer);
+      $('#log').innerHTML = `<table><tr><th>Time</th><th>Officer</th><th>Action</th><th>Detail</th></tr>
+        ${logs.slice(0, 200).map((l) => `<tr><td>${fmt(l.time)}</td><td>${esc(l.user)}</td><td>${esc(l.action)}</td><td>${esc(l.detail)}</td></tr>`).join('')}</table>`;
+    }
+
+    $('#fOfficer').onchange = (e) => { fOfficer = e.target.value; render(); };
+    $('#fStatus').onchange = (e) => { fStatus = e.target.value; render(); };
+    $('#fISys').onchange = (e) => { fISys = e.target.value; render(); };
+    $('#fFrom').onchange = (e) => { fFrom = e.target.value; render(); };
+    $('#fTo').onchange = (e) => { fTo = e.target.value; render(); };
+    $('#fSys').onchange = (e) => { fSys = e.target.value; render(); renderQr(); };
+
+    document.addEventListener('click', async (e) => {
+      const b = e.target.closest('button[data-a]'); if (!b) return;
+      if (b.dataset.a === 'resolve') {
+        const inc = S.incidents.find((i) => i.id === b.dataset.id);
+        const ok = await confirmBox({
+          title: 'Resolve this leak?',
+          message: `${inc ? inc.pipe.toUpperCase() : 'This leak'} will be marked as resolved under your name.\nIts valves reopen unless another active leak still needs them.`,
+          confirmText: 'Yes, resolve', cancelText: 'Cancel' });
+        if (!ok) return;
+        try { await api(`/incidents/${b.dataset.id}/resolve`, { method: 'POST' }); toast('Leak resolved. Valves reopened.'); load(); }
+        catch (ex) { fail('Could not resolve the leak', ex); }
+      }
+      if (b.dataset.a === 'pw') {
+        const el = b.previousElementSibling, shown = b.dataset.shown === '1';
+        el.textContent = shown ? '••••••••' : el.dataset.p; b.dataset.shown = shown ? '0' : '1'; b.textContent = shown ? 'Show' : 'Hide';
+      }
+      if (b.dataset.a === 'reset') {
+        const np = await promptBox({ title: `Reset password for ${b.dataset.u}`, message: 'Enter the new password (minimum 6 characters).',
+          input: { type: 'text', placeholder: 'New password' }, confirmText: 'Reset password' });
+        if (!np) return;
+        try { await api(`/users/${encodeURIComponent(b.dataset.u)}/password`, { body: { newPassword: np } }); toast('Password reset.'); load(); }
+        catch (ex) { fail('Could not reset the password', ex); }
+      }
+    });
+
+    /* ---------- downloads ---------- */
+    const mins = (a, b) => (b ? Math.round((new Date(b) - new Date(a)) / 60000) : '');
+    $('#btnCsv').onclick = () => csvDownload('pipe-leakage-report.csv', [
+      ['Pipe', 'System (Hydrant / Sprinkler / Fire Pump)', 'Reported by', 'Reported at', 'Valves closed', 'Status', 'Resolved by', 'Resolved at', 'Duration (minutes)'],
+      ...incRows().map((i) => [i.pipe.toUpperCase(), i.system || sysOfPipe(i.pipe), i.reportedBy, fmt(i.reportedAt),
+        i.closed.map((x) => x.toUpperCase()).join(' + '), i.status, i.resolvedBy || '', i.resolvedAt ? fmt(i.resolvedAt) : '', mins(i.reportedAt, i.resolvedAt)])]);
+    $('#btnPipes').onclick = () => {
+      const inc = incRows();
+      csvDownload('pipe-summary.csv', [['Pipe', 'System', 'Valves to isolate', 'Number of leaks', 'Active now', 'Last leak', 'Last reported by'],
+        ...PIPES.filter((p) => !fISys || p.system === fISys).map((p) => {
+          const l = inc.filter((i) => i.pipe === p.id);
+          return [p.id.toUpperCase(), p.system, (ISOLATION[p.id] || []).map((v) => v.toUpperCase()).join(' + '), l.length,
+            l.some((i) => i.status === 'ACTIVE') ? 'YES' : 'no', l[0] ? fmt(l[0].reportedAt) : '', l[0]?.reportedBy || ''];
+        })]);
+    };
+
+    /* ---------- QR codes: carry the saved permanent link ---------- */
+    const baseNow = () => ($('#baseUrl').value.trim() || location.origin).replace(/\/+$/, '');
+    async function renderQr() {
+      const base = baseNow();
+      const local = /localhost|127\.0\.0\.1|(^|\/\/)(192\.168|10\.|172\.(1[6-9]|2\d|3[01]))\./.test(base);
+      $('#qrNote').innerHTML = local
+        ? '<span class="warn">⚠ This link only works on this computer or your local network. Before printing, enter your hosted https:// link and save it.</span>'
+        : `QR codes open: <b>${esc(base)}/valve.html?id=…</b>`;
+      const cards = await Promise.all(sys().map(async (v) => {
+        const url = `${base}/valve.html?id=${v.id}`;
+        const img = await QRCode.toDataURL(url, { width: 280, margin: 2 });
+        return `<div class="qr"><img src="${img}" alt="${esc(v.name)}"><h3>${esc(v.name)}</h3>
+          <span id="qs-${v.id}" class="chip livechip c-${v.status}">${v.status}</span><small>${esc(url)}</small></div>`;
+      }));
+      $('#qrs').innerHTML = cards.join('');
+    }
+    function initQrControls() {
+      $('#baseUrl').value = S.publicUrl || location.origin;
+      const admin = me.role === 'admin';
+      $('#baseUrl').readOnly = !admin || S.publicLocked;
+      $('#btnSaveUrl').style.display = admin && !S.publicLocked ? '' : 'none';
+    }
+    $('#btnSaveUrl').onclick = async () => {
+      try {
+        const r = await api('/settings', { body: { publicUrl: $('#baseUrl').value } });
+        $('#baseUrl').value = r.publicUrl || location.origin;
+        await renderQr();
+        toast('Link saved. All QR codes now carry this link.');
+      } catch (e) { fail('Could not save the link', e); }
+    };
+    $('#baseUrl').addEventListener('change', renderQr);
+    $('#btnPrint').onclick = () => { document.body.classList.add('print-qr'); window.print(); document.body.classList.remove('print-qr'); };
+
+    /* ---------- users (admin only) ---------- */
+    function renderUsers(users) {
+      $('#users').style.display = '';
+      $('#userList').innerHTML = `<table><tr><th>Username</th><th>Name</th><th>Role</th><th>Password</th><th>Created</th><th></th></tr>
+        ${users.map((u) => `<tr><td>${esc(u.username)}</td><td>${esc(u.name)}</td><td>${esc(u.role)}</td>
+          <td>${u.role === 'admin' ? '<span class="muted">hidden</span>'
+            : u.password ? `<code data-p="${esc(u.password)}">••••••••</code> <button class="sm" data-a="pw" data-shown="0">Show</button>`
+            : '<span class="muted">not available. Press Reset</span>'}</td>
+          <td>${fmt(u.created)}</td>
+          <td>${u.role === 'admin' ? '' : `<button class="sm" data-a="reset" data-u="${esc(u.username)}">Reset</button>`}</td></tr>`).join('')}</table>`;
+    }
+    $('#btnAddUser').onclick = async () => {
+      try {
+        await api('/users', { body: { username: $('#nuUser').value, name: $('#nuName').value, password: $('#nuPass').value, role: $('#nuRole').value } });
+        ['#nuUser', '#nuName', '#nuPass'].forEach((s) => ($(s).value = '')); toast('User added.'); load();
+      } catch (e) { fail('Could not add the user', e); }
+    };
+    $('#btnPw').onclick = async () => {
+      const oldPassword = await promptBox({ title: 'Change your password', message: 'Enter your current password.', input: { type: 'password', placeholder: 'Current password' } });
+      if (!oldPassword) return;
+      const newPassword = await promptBox({ title: 'New password', message: 'Choose a new password (minimum 6 characters).', input: { type: 'password', placeholder: 'New password' }, confirmText: 'Change password' });
+      if (!newPassword) return;
+      try { await api('/password', { body: { oldPassword, newPassword } }); toast('Password changed.'); }
+      catch (e) { fail('Could not change the password', e); }
+    };
+
+    await load();
+    initQrControls();
+    renderQr();
+    setInterval(() => load().catch(() => setStatus('⚠ Server not reachable', 'bad')), 5000);
+  </script>
+</body>
+</html>

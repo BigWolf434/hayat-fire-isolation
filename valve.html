@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Valve status</title>
+  <style>
+    *{box-sizing:border-box}
+    body{margin:0;min-height:100vh;padding:16px;background:#070d1c;color:#e8eefb;font-family:system-ui,"Segoe UI",Roboto,sans-serif;display:grid;place-items:start center}
+    .card{width:min(440px,100%);border-radius:16px;overflow:hidden;background:#0e1830;border:1px solid #1e2f57}
+    .head{padding:22px 18px;text-align:center}.head h1{margin:0;font-size:28px}.head small{display:block;opacity:.85;margin-top:2px}
+    .head div{margin-top:6px;font-size:24px;font-weight:800;letter-spacing:1px}
+    .OPEN .head{background:#b45309}.CLOSED .head{background:#15803d}
+    .body{padding:14px 18px 18px}
+    .r{display:flex;justify-content:space-between;gap:12px;padding:9px 0;border-bottom:1px solid #1e2f57;font-size:14px}
+    .r span:first-child{color:#8fa3c8}.r span:last-child{text-align:right;font-weight:600}
+    .cap{margin-top:10px;padding:10px;border-radius:10px;font-weight:700;text-align:center;color:#fff}
+    .cap.ready{background:#15803d}.cap.degraded{background:#b45309}.cap.critical{background:#b91c1c}
+    a.btn{display:block;margin-top:14px;padding:12px;border-radius:8px;background:#2563eb;color:#fff;text-align:center;text-decoration:none}
+    .hint{color:#8fa3c8;font-size:12px;margin-top:10px;text-align:center}
+  </style>
+</head>
+<body>
+  <div class="card" id="c">Loading…</div>
+  <script type="module">
+    import { api } from '/api.js';
+    import { ISOLATION } from '/config.js';
+    const c = document.getElementById('c');
+    const id = new URLSearchParams(location.search).get('id');
+    const fmt = (i) => (i ? new Date(i).toLocaleString() : '—');
+    const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+    const LBL = { ready: 'READY', degraded: 'DEGRADED', critical: 'NOT READY' };
+    const guards = Object.entries(ISOLATION).filter(([, v]) => v.includes(id)).map(([p]) => p.toUpperCase());
+
+    function render(v) {
+      let rows = '';
+      if (v.detailed) {
+        if (v.status === 'CLOSED') rows = `<div class="r"><span>Closed by</span><span>${esc(v.closedBy)}</span></div>
+          <div class="r"><span>Closed at</span><span>${fmt(v.closedAt)}</span></div>
+          <div class="r"><span>Leaking pipe</span><span>${esc(v.activePipes.map((p) => p.toUpperCase()).join(', ') || '—')}</span></div>`;
+        else if (v.closedAt) rows = `<div class="r"><span>Last closed by</span><span>${esc(v.closedBy)}</span></div>
+          <div class="r"><span>Last closed at</span><span>${fmt(v.closedAt)}</span></div>
+          <div class="r"><span>Last leaking pipe</span><span>${esc(v.lastPipes.map((p) => p.toUpperCase()).join(', ') || '—')}</span></div>
+          <div class="r"><span>Reopened by</span><span>${esc(v.reopenedBy)} · ${fmt(v.reopenedAt)}</span></div>`;
+        else rows = '<p class="hint">This valve has never been closed for a leak.</p>';
+      } else if (v.status === 'CLOSED') {
+        rows = `<p class="hint">Log in as an HSE officer to see who closed this valve, when, and which pipe was leaking.</p>
+          <a class="btn" href="/login.html?next=${encodeURIComponent(location.pathname + location.search)}">Log in</a>`;
+      } else rows = '<p class="hint">Valve is open (normal operation).</p>';
+      rows += `<div class="r"><span>Closes when these pipes leak</span><span>${esc(guards.join(', ') || '—')}</span></div>`;
+      const caps = (v.buildings || []).map((b) => `<div class="cap ${b.level}">${esc(b.name)}: fire capacity ${b.pct}% · ${LBL[b.level]}</div>`).join('');
+      c.className = 'card ' + v.status;
+      c.innerHTML = `<div class="head"><h1>${esc(v.name)}</h1><small>${esc(v.system)} valve</small><div>${v.status}</div></div>
+        <div class="body">${rows}${caps}<p class="hint">Live status · updates automatically</p></div>`;
+    }
+    async function load() {
+      try { render(await api('/public/valve/' + encodeURIComponent(id), { noRedirect: true })); }
+      catch { c.textContent = 'Valve not found.'; }
+    }
+    load();
+    setInterval(load, 5000);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) load(); });
+  </script>
+</body>
+</html>
